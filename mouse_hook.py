@@ -1,13 +1,14 @@
-"""Global mouse listener — the TOP side button (XButton2) toggles dictation.
+"""Global mouse listener — the BOTTOM side button (XButton1) toggles dictation.
 
-The top side button is swallowed system-wide so it never triggers its default
-Forward/Back action in any app, EXCEPT when Fortnite is the foreground window.
-In Fortnite the button passes through untouched (and does NOT toggle dictation),
-so in-game rebinds keep working.
+The bottom side button is swallowed system-wide so it never triggers its default
+Back action in any app, EXCEPT when Fortnite is the foreground window. In Fortnite
+the button passes through untouched (and does NOT toggle dictation), so in-game
+rebinds keep working. (The TOP side button, XButton2, is left entirely alone so
+it stays free for Fortnite.)
 
 Windows side-button mapping:
-    XButton1 (=1) → front/bottom button, default "Back"     (left alone here)
-    XButton2 (=2) → rear/top button,    default "Forward"   (our trigger)
+    XButton1 (=1) → front/bottom button, default "Back"     (our trigger)
+    XButton2 (=2) → rear/top button,    default "Forward"   (left alone here)
 """
 import ctypes
 import threading
@@ -28,7 +29,7 @@ except Exception:  # pragma: no cover
 
 _WM_XBUTTONDOWN = 0x020B
 _WM_XBUTTONUP = 0x020C
-_XBUTTON2 = 2  # top side button ("forward")
+_XBUTTON1 = 1  # bottom side button ("back") — our trigger
 
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
@@ -79,10 +80,10 @@ class MouseHook:
         # Fast path: anything that isn't a side-button message passes straight through.
         if msg not in (_WM_XBUTTONDOWN, _WM_XBUTTONUP):
             return True
-        if (data.mouseData >> 16) != _XBUTTON2:
-            return True  # bottom side button (x1) and others: leave untouched
+        if (data.mouseData >> 16) != _XBUTTON1:
+            return True  # top side button (x2) and others: leave untouched
 
-        # Top side button. In Fortnite, let the game have it (no dictation toggle).
+        # Bottom side button. In Fortnite, let the game have it (no dictation toggle).
         if _is_fortnite_foreground():
             return True
 
@@ -109,7 +110,7 @@ class MouseHook:
         self._thread = threading.Thread(target=self._listener.start, daemon=True)
         self._thread.start()
         log_event("state", "mouse hook started",
-                  {"trigger": "XButton2", "suppress_default": True})
+                  {"trigger": "XButton1", "suppress_default": True})
 
     def stop(self) -> None:
         if self._listener:
