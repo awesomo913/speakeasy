@@ -1,0 +1,18 @@
+# Build artifacts
+/.venv-build/
+/dist/
+/build/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+
+# UI mockup scratch
+/mockups/
+
+# Local runtime data / secrets
+/data/
+*.log
+
+# Legacy vosk model (unused — app uses faster-whisper, downloaded at runtime)
+/vosk-model-small-en-us-0.15/
