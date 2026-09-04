@@ -40,6 +40,7 @@ from audio_capture import AudioCapture
 from fortnite_guard import FortniteGuard
 from mouse_hook import MouseHook
 from overlay import Overlay
+from status_dot import StatusDot
 from text_inserter import TextInserter
 from transcription import Transcriber
 from tray import Tray
@@ -112,6 +113,15 @@ class AutoMicApp:
             on_settings=lambda: self._cmd_queue.put("open_settings"),
         )
 
+        # persistent taskbar-corner status dot — always visible, unlike the
+        # cursor-following overlay which only shows during an action
+        self.status_dot = StatusDot(
+            self.overlay.get_root(),
+            on_toggle_pause=lambda: self._cmd_queue.put("toggle_pause"),
+            on_settings=lambda: self._cmd_queue.put("open_settings"),
+            on_quit=lambda: self._cmd_queue.put("shutdown"),
+        )
+
         # last cursor position for overlay placement
         self._cursor_x: int = 0
         self._cursor_y: int = 0
@@ -128,6 +138,7 @@ class AutoMicApp:
         self.state = new
         log_event("state", f"{old.name} -> {new.name}",
                   {"from": old.name, "to": new.name})
+        self.status_dot.set_state(new, self._paused)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -148,8 +159,10 @@ class AutoMicApp:
         self.transcriber.ensure_loaded()
         print("[AutoMic] Model ready.")
 
-        # start tray icon (pause/resume + quit) and mouse hook
+        # start tray icon (pause/resume + quit), status dot, and mouse hook
         self._tray.start()
+        self.status_dot.show()
+        self.status_dot.set_state(self.state, self._paused)
         self._hook.start()
         self._guard.start()
 
@@ -167,6 +180,7 @@ class AutoMicApp:
         self._hook.stop()
         self._guard.stop()
         self._tray.stop()
+        self.status_dot.destroy()
         self.overlay.destroy()
 
     # ------------------------------------------------------------------
@@ -244,6 +258,7 @@ class AutoMicApp:
             self._set_state(State.IDLE)
             self.overlay.hide()
         self._tray.refresh()
+        self.status_dot.set_state(self.state, self._paused)
 
     def _open_settings(self):
         """Open the settings window on the main thread (tkinter-safe)."""
@@ -277,6 +292,7 @@ class AutoMicApp:
             print("[AutoMic] No speech detected.")
             self.overlay.state_error("No speech detected — try again", self._cursor_x, self._cursor_y)
             self._set_state(State.IDLE)
+            self.status_dot.flash_error(self.state, self._paused)
             return
 
         print(f"[AutoMic] Transcribing {len(self._wav_data)} bytes...")
@@ -295,6 +311,7 @@ class AutoMicApp:
         if not text.strip():
             self.overlay.state_error("Transcription was empty", self._cursor_x, self._cursor_y)
             self._set_state(State.IDLE)
+            self.status_dot.flash_error(self.state, self._paused)
             return
 
         self._set_state(State.PASTING)
@@ -307,6 +324,7 @@ class AutoMicApp:
         log_event("failure", "transcription failed", {"error": str(exc)})
         self.overlay.state_error(f"Transcription failed: {exc}", self._cursor_x, self._cursor_y)
         self._set_state(State.IDLE)
+        self.status_dot.flash_error(self.state, self._paused)
 
 
 # ═══════════════════════════════════════════════════════════════════

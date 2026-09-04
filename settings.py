@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover
 
 
 APP_NAME = "SpeakEasy"
-DEFAULTS: dict = {"autostart": False}
+DEFAULTS: dict = {"autostart": False, "dot_x": None, "dot_y": None}
 
 
 # ---------- settings file ----------
