@@ -45,6 +45,16 @@ from text_inserter import TextInserter
 from transcription import Transcriber
 from tray import Tray
 
+try:
+    import settings as _settings
+except Exception:  # pragma: no cover — dev-standalone fallback
+    _settings = None
+
+try:
+    import llm_cleanup as _llm
+except Exception:  # pragma: no cover
+    _llm = None
+
 
 # Max length of a single recording before it auto-stops (safety cap for long
 # dictation — was 60s, which cut people off mid-sentence).
@@ -94,6 +104,9 @@ class AutoMicApp:
         # audio capture — created on demand
         self._audio: AudioCapture | None = None
         self._wav_data: bytes = b""
+        # last raw transcript, kept so a failed LLM polish can fall back
+        # to pasting the unpolished text instead of losing the dictation
+        self._raw_text: str = ""
 
         # mouse hook
         self._hook = MouseHook(on_toggle=self._on_toggle)
@@ -161,8 +174,7 @@ class AutoMicApp:
 
         # start tray icon (pause/resume + quit), status dot, and mouse hook
         self._tray.start()
-        self.status_dot.show()
-        self.status_dot.set_state(self.state, self._paused)
+        self._refresh_dot()
         self._hook.start()
         self._guard.start()
 
@@ -225,6 +237,8 @@ class AutoMicApp:
             self._handle_pause()
         elif cmd == "open_settings":
             self._open_settings()
+        elif cmd == "refresh_dot":
+            self._refresh_dot()
         elif cmd == "shutdown":
             self.shutdown()
             return True
@@ -234,6 +248,10 @@ class AutoMicApp:
                 self._on_transcription_result(cmd[1])
             elif kind == "transcribe_error":
                 self._on_transcription_error(cmd[1])
+            elif kind == "polish_result":
+                self._on_polish_result(cmd[1])
+            elif kind == "polish_error":
+                self._on_polish_error(cmd[1])
         return False
 
     # ------------------------------------------------------------------
@@ -264,9 +282,33 @@ class AutoMicApp:
         """Open the settings window on the main thread (tkinter-safe)."""
         try:
             from settings_window import open_settings_window
-            open_settings_window(self.overlay.get_root())
+            open_settings_window(
+                self.overlay.get_root(),
+                on_dot_toggle=lambda: self._cmd_queue.put("refresh_dot"),
+            )
         except Exception as exc:  # noqa: BLE001 — never crash the loop on UI error
             log_event("failure", "open settings failed", {"error": str(exc)})
+
+    def _refresh_dot(self) -> None:
+        """Apply the show_dot preference live (called at startup + on GUI toggle)."""
+        try:
+            show = bool(_settings.load().get("show_dot", True)) if _settings else True
+        except Exception:
+            show = True
+        self.status_dot.set_visible(show)
+        if show:
+            self.status_dot.set_state(self.state, self._paused)
+        log_event("state", "status dot visibility applied", {"visible": show})
+
+    def _llm_cleanup_enabled(self) -> bool:
+        """True only when the user opted in AND provided a key (else raw paste)."""
+        if _llm is None or _settings is None:
+            return False
+        try:
+            data = _settings.load()
+        except Exception:
+            return False
+        return bool(data.get("llm_cleanup")) and bool(data.get("llm_api_key", "").strip())
 
     def _start_recording(self):
         print("[AutoMic] Recording started...")
@@ -314,10 +356,45 @@ class AutoMicApp:
             self.status_dot.flash_error(self.state, self._paused)
             return
 
+        self._raw_text = text  # keep for fallback if the polish pass fails
+
+        if self._llm_cleanup_enabled():
+            print("[AutoMic] Polishing with LLM...")
+            self._set_state(State.TRANSCRIBING)
+            self.overlay.state_transcribing(self._cursor_x, self._cursor_y)
+            data = _settings.load()
+            _llm.clean_async(
+                text,
+                api_key=data.get("llm_api_key", ""),
+                model=data.get("llm_model", "openai/gpt-4o-mini"),
+                on_done=lambda polished: self._cmd_queue.put(("polish_result", polished)),
+                on_error=lambda exc: self._cmd_queue.put(("polish_error", exc)),
+            )
+            return
+
+        self._paste_text(text)
+
+    def _paste_text(self, text: str) -> None:
+        """Single choke point for all pasting (raw or polished)."""
         self._set_state(State.PASTING)
         self.overlay.state_pasting(preview=text, x=self._cursor_x, y=self._cursor_y)
         self.inserter.paste(text)
         self._set_state(State.IDLE)
+
+    def _on_polish_result(self, text: str):
+        polished = (text or "").strip()
+        if not polished:
+            # Empty polish = fall back to raw, never paste nothing.
+            log_event("warning", "llm polish empty; using raw transcript")
+            polished = self._raw_text
+        print(f"[AutoMic] Polished: '{polished}'")
+        self._paste_text(polished)
+
+    def _on_polish_error(self, exc: Exception):
+        print(f"[AutoMic] Polish failed, pasting raw: {exc}")
+        log_event("warning", "llm polish failed; using raw transcript",
+                  {"error": str(exc)})
+        self._paste_text(self._raw_text)
 
     def _on_transcription_error(self, exc: Exception):
         print(f"[AutoMic] Transcription error: {exc}")

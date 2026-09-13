@@ -25,7 +25,18 @@ except Exception:  # pragma: no cover
 
 
 APP_NAME = "SpeakEasy"
-DEFAULTS: dict = {"autostart": False, "dot_x": None, "dot_y": None}
+DEFAULTS: dict = {
+    "autostart": False,
+    "dot_x": None,
+    "dot_y": None,
+    # LLM polish pass (Pithflow-style cleanup): off by default so the app
+    # behaves exactly as before until the user opts in + provides a key.
+    "llm_cleanup": False,
+    "llm_api_key": "",
+    "llm_model": "openai/gpt-4o-mini",
+    # Status dot visibility: on by default (previous behavior).
+    "show_dot": True,
+}
 
 
 # ---------- settings file ----------
@@ -137,6 +148,8 @@ def set_autostart(enabled: bool) -> bool:
 
     data = load()
     data["autostart"] = bool(enabled)
-    save(data)
-    log_event("decision", "autostart changed", {"enabled": bool(enabled)})
-    return True
+    # Propagate the save result: a failed write must NOT report success
+    # (skeptic 2026-09-13 — the old `return True` lied to the GUI).
+    ok = save(data)
+    log_event("decision", "autostart changed", {"enabled": bool(enabled), "ok": ok})
+    return ok

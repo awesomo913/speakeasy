@@ -146,6 +146,14 @@ class StatusDot:
         if self._win is None:
             self._build()
 
+    def set_visible(self, visible: bool) -> None:
+        """Show or hide the dot live (driven by the show_dot setting)."""
+        if visible:
+            self.show()
+        else:
+            self.destroy()
+        log_event("state", "status dot visibility set", {"visible": visible})
+
     def destroy(self) -> None:
         self._pulse_active = False
         if self._win is not None:
@@ -154,6 +162,11 @@ class StatusDot:
             except Exception:
                 pass
             self._win = None
+        # Drop canvas refs so a pending flash_error timer firing after
+        # destroy() hits the None guard in _set() instead of raising
+        # TclError on a dead canvas (skeptic 2026-09-13).
+        self._canvas = None
+        self._circle_id = None
 
     def set_state(self, state, paused: bool) -> None:
         """Reflect main.py's State enum + paused flag as a color/pulse."""

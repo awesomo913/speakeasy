@@ -27,6 +27,7 @@ args = [
     "--hidden-import=settings",
     "--hidden-import=settings_window",
     "--hidden-import=fortnite_guard",
+    "--hidden-import=llm_cleanup",
     # --- tray + image ---
     "--collect-submodules=pystray",
     "--hidden-import=pystray._win32",
