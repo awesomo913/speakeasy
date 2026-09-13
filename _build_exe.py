@@ -13,7 +13,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_NAME = "SpeakEasy"
-DESKTOP = os.path.join(os.environ["USERPROFILE"], "Desktop")
+# get() with fallback: a bare service/minimal env without USERPROFILE used
+# to crash here with KeyError before the build even started (skeptic 2026-09-13).
+DESKTOP = os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), "Desktop")
 ICO = os.path.join(HERE, "icon.ico")
 MAIN = os.path.join(HERE, "main.py")
 
@@ -58,11 +60,14 @@ args = [
 ]
 
 print("[build] Running PyInstaller (this may take 1-2 minutes)...")
-subprocess.check_call(args, cwd=HERE)
+# timeout so a hung PyInstaller fails loudly instead of blocking forever
+# (skeptic 2026-09-13); 20 min comfortably covers slow machines.
+subprocess.check_call(args, cwd=HERE, timeout=1200)
 print("[build] PyInstaller complete.")
 
 # Copy to Desktop (single source of truth for the launchable app).
 src = os.path.join(HERE, "dist", f"{APP_NAME}.exe")
+os.makedirs(DESKTOP, exist_ok=True)  # skeptic 2026-09-13: missing dir crashed copy2
 dst = os.path.join(DESKTOP, f"{APP_NAME}.exe")
 shutil.copy2(src, dst)
 size_mb = round(os.path.getsize(dst) / (1024 * 1024), 1)
