@@ -16,23 +16,52 @@ from collections.abc import Callable
 
 import numpy as np
 
+from settings import language_to_whisper
+from speakeasy_log import log_event
+
 try:
-    # main.py installs the logger + adds ~/.claude/scripts to sys.path first.
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
+    import settings as _settings
+except Exception:  # pragma: no cover — dev-standalone fallback
+    _settings = None
 
 
 # ── Tuning knobs (safe to tweak) ─────────────────────────────────────
-#   WHISPER_MODEL  : "tiny" < "base" < "small" < "medium" < "large-v3"
-#                    (bigger = more accurate, slower, more RAM)
+#   MODEL SIZE     : "tiny" < "base" < "small" < "medium" < "large-v3"
+#                    (bigger = more accurate, slower, more RAM). Read from
+#                    settings at load time; changing it takes effect on the
+#                    next launch (the model is only loaded once per process).
 #   COMPUTE_TYPE   : "int8" is fast + light on CPU; "float32" is slower/heavier
 #   BEAM_SIZE      : higher = more accurate, slower (1 = greedy/fastest)
-WHISPER_MODEL = "small"
+DEFAULT_MODEL = "small"
+VALID_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 COMPUTE_TYPE = "int8"
 BEAM_SIZE = 5
 SAMPLE_RATE = 16000
+
+
+def _configured_model() -> str:
+    """Read the whisper model size from settings, falling back safely."""
+    if _settings is None:
+        return DEFAULT_MODEL
+    try:
+        model = str(_settings.load().get("model", DEFAULT_MODEL)).strip()
+    except Exception as exc:  # noqa: BLE001 — a bad settings file must not block startup
+        log_event("warning", "reading model setting failed; using default",
+                  {"error": str(exc)})
+        return DEFAULT_MODEL
+    return model if model in VALID_MODELS else DEFAULT_MODEL
+
+
+def _configured_language() -> str | None:
+    """Read the language setting and map it to faster-whisper's expected value."""
+    if _settings is None:
+        return None
+    try:
+        return language_to_whisper(_settings.load().get("language", "auto"))
+    except Exception as exc:  # noqa: BLE001
+        log_event("warning", "reading language setting failed; using auto-detect",
+                  {"error": str(exc)})
+        return None
 
 
 class Transcriber:
@@ -42,6 +71,7 @@ class Transcriber:
         self._model = None
         self._lock = threading.Lock()
         self._loaded = False
+        self._model_name = DEFAULT_MODEL
 
     # ------------------------------------------------------------------
     def ensure_loaded(self) -> None:
@@ -53,21 +83,22 @@ class Transcriber:
                 return
             from faster_whisper import WhisperModel
 
-            print(f"[Transcriber] Loading Whisper model '{WHISPER_MODEL}'...")
+            self._model_name = _configured_model()
+            print(f"[SpeakEasy] Loading Whisper model '{self._model_name}'...")
             t0 = time.perf_counter()
             try:
                 self._model = WhisperModel(
-                    WHISPER_MODEL, device="cpu", compute_type=COMPUTE_TYPE
+                    self._model_name, device="cpu", compute_type=COMPUTE_TYPE
                 )
             except Exception as exc:
                 log_event("boundary", "whisper model load",
-                          {"model": WHISPER_MODEL, "ok": False, "error": str(exc)})
+                          {"model": self._model_name, "ok": False, "error": str(exc)})
                 raise
             log_event("boundary", "whisper model load",
-                      {"model": WHISPER_MODEL, "ok": True,
+                      {"model": self._model_name, "ok": True,
                        "ms": round((time.perf_counter() - t0) * 1000)})
             self._loaded = True
-            print("[Transcriber] Model ready.")
+            print("[SpeakEasy] Model ready.")
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -94,7 +125,7 @@ class Transcriber:
         t0 = time.perf_counter()
         segments, _info = self._model.transcribe(
             audio,
-            language="en",
+            language=_configured_language(),  # None = auto-detect
             beam_size=BEAM_SIZE,
             vad_filter=True,                 # skip silent gaps (no hallucinations)
             condition_on_previous_text=False,  # prevents repetition loops on long audio

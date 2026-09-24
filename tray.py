@@ -4,31 +4,33 @@ Runs pystray's icon loop on a daemon thread. Menu actions fire on that thread
 and call back into the app via the provided callbacks (which should just enqueue
 commands onto the app's thread-safe queue — never touch tkinter directly here).
 """
+from __future__ import annotations
+
+import subprocess
 import threading
 from collections.abc import Callable
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image
 
-try:
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
+from icon_art import PAUSED_BOTTOM, PAUSED_TOP, build_icon, build_icon_with_badge
+from speakeasy_log import default_log_dir, log_event
+from theme import ACCENT, RECORDING, TRANSCRIBING
+from version import __version__
+
+_ICON_RENDER_SIZE = 256  # drawn big, downscaled for anti-aliased tray edges
+_ICON_DISPLAY_SIZE = 64
 
 
-def _make_icon_image(paused: bool) -> Image.Image:
-    """Draw a simple mic icon. Greyed when paused, red when listening."""
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([4, 4, size - 4, size - 4], fill=(30, 20, 50, 255))
-    body = (120, 120, 120, 255) if paused else (210, 60, 70, 255)
-    cx, cy = size // 2, size // 2 - 2
-    draw.rounded_rectangle([cx - 9, cy - 17, cx + 9, cy + 9], radius=9, fill=body)
-    draw.rectangle([cx - 2, cy + 9, cx + 2, cy + 17], fill=body)
-    draw.rectangle([cx - 8, cy + 16, cx + 8, cy + 20], fill=body)
-    return img
+def _make_icon_image(paused: bool, recording: bool = False) -> Image.Image:
+    """Shared gradient mic tile. Grey gradient when paused, red badge when recording."""
+    if recording:
+        img = build_icon_with_badge(ACCENT, TRANSCRIBING, RECORDING, _ICON_RENDER_SIZE)
+    elif paused:
+        img = build_icon(PAUSED_TOP, PAUSED_BOTTOM, _ICON_RENDER_SIZE)
+    else:
+        img = build_icon(ACCENT, TRANSCRIBING, _ICON_RENDER_SIZE)
+    return img.resize((_ICON_DISPLAY_SIZE, _ICON_DISPLAY_SIZE), Image.LANCZOS)
 
 
 class Tray:
@@ -51,13 +53,17 @@ class Tray:
     # ------------------------------------------------------------------
     def _menu(self) -> pystray.Menu:
         items = [
+            pystray.MenuItem(f"SpeakEasy v{__version__}", None, enabled=False),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda _item: "Resume listening" if self._is_paused() else "Pause listening",
                 self._handle_pause,
             ),
         ]
         if self._on_settings is not None:
-            items.append(pystray.MenuItem("Settings", self._handle_settings))
+            items.append(pystray.MenuItem("Settings…", self._handle_settings))
+        items.append(pystray.MenuItem("Open log folder", self._handle_open_logs))
+        items.append(pystray.Menu.SEPARATOR)
         items.append(pystray.MenuItem("Quit SpeakEasy", self._handle_quit))
         return pystray.Menu(*items)
 
@@ -73,6 +79,15 @@ class Tray:
         # before it has been updated and show stale state.
         self._on_toggle_pause()
 
+    def _handle_open_logs(self, icon, _item) -> None:
+        log_dir = default_log_dir()
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(["explorer", str(log_dir)])  # noqa: S603, S607
+        except OSError as exc:
+            log_event("failure", "open log folder failed",
+                      {"error": str(exc), "path": str(log_dir)})
+
     def _handle_quit(self, icon, _item) -> None:
         log_event("state", "tray quit selected")
         self._on_quit()       # ask the app to shut down cleanly
@@ -83,7 +98,7 @@ class Tray:
         self._icon = pystray.Icon(
             "SpeakEasy",
             _make_icon_image(self._is_paused()),
-            "SpeakEasy — listening",
+            f"SpeakEasy v{__version__} — listening",
             menu=self._menu(),
         )
         self._thread = threading.Thread(target=self._icon.run, daemon=True)
@@ -96,7 +111,10 @@ class Tray:
             return
         paused = self._is_paused()
         self._icon.icon = _make_icon_image(paused)
-        self._icon.title = "SpeakEasy — paused" if paused else "SpeakEasy — listening"
+        self._icon.title = (
+            f"SpeakEasy v{__version__} — paused" if paused
+            else f"SpeakEasy v{__version__} — listening"
+        )
         self._icon.update_menu()
 
     def stop(self) -> None:

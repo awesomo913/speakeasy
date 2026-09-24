@@ -12,24 +12,20 @@ import tkinter as tk
 from collections.abc import Callable
 from ctypes import wintypes
 
-try:
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
+from speakeasy_log import log_event
+from theme import (
+    COLOR_ERROR,
+    COLOR_IDLE,
+    COLOR_PASTING,
+    COLOR_PAUSED,
+    COLOR_RECORDING,
+    COLOR_TRANSCRIBING,
+)
 
 try:
     import settings
 except Exception:  # pragma: no cover — dev-standalone import fallback
     settings = None
-
-# Colors match overlay.py exactly so the two indicators never disagree.
-COLOR_IDLE = "#2a9d8f"      # green — armed, ready
-COLOR_RECORDING = "#e63946"  # red
-COLOR_TRANSCRIBING = "#457b9d"  # blue
-COLOR_PASTING = "#4fd1b8"    # bright green flash
-COLOR_PAUSED = "#5a5a5a"     # grey
-COLOR_ERROR = "#ff6b6b"
 
 SIZE = 16
 MARGIN = 8
@@ -43,10 +39,17 @@ def _work_area() -> tuple[int, int, int, int]:
     """Screen area excluding the taskbar (left, top, right, bottom)."""
     rect = wintypes.RECT()
     try:
-        ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
-        return rect.left, rect.top, rect.right, rect.bottom
-    except Exception:
+        ok = ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0)
+    except OSError as exc:
+        log_event("warning", "SystemParametersInfoW raised; using fallback work area",
+                  {"error": str(exc)})
         return 0, 0, 1920, 1080
+    # A zero return (or a degenerate rect) would size windows to ~1px — fall back instead.
+    if not ok or rect.right - rect.left < 200 or rect.bottom - rect.top < 200:
+        log_event("warning", "work area unavailable; using fallback",
+                  {"ok": bool(ok), "rect": [rect.left, rect.top, rect.right, rect.bottom]})
+        return 0, 0, 1920, 1080
+    return rect.left, rect.top, rect.right, rect.bottom
 
 
 class StatusDot:
@@ -58,7 +61,7 @@ class StatusDot:
 
     def __init__(
         self,
-        root: "tk.Tk",
+        root: tk.Tk,
         on_toggle_pause: Callable[[], None],
         on_settings: Callable[[], None] | None = None,
         on_quit: Callable[[], None] | None = None,
@@ -96,8 +99,9 @@ class StatusDot:
                 x, y = data.get("dot_x"), data.get("dot_y")
                 if isinstance(x, int) and isinstance(y, int):
                     return x, y
-            except Exception:  # noqa: BLE001 — never block startup on a bad prefs file
-                pass
+            except Exception as exc:  # noqa: BLE001 — never block startup on a bad prefs file
+                log_event("warning", "status dot position load failed; using default",
+                          {"error": str(exc)})
         return self._default_position()
 
     def _save_position(self, x: int, y: int) -> None:
@@ -118,8 +122,9 @@ class StatusDot:
         win.attributes("-topmost", True)
         try:
             win.attributes("-transparentcolor", TRANSPARENT_KEY)
-        except tk.TclError:
-            pass  # some Windows configs reject color-keying; solid bg is fine
+        except tk.TclError as exc:
+            # Some Windows configs reject color-keying; solid bg is fine.
+            log_event("warning", "status dot transparentcolor unsupported", {"error": str(exc)})
         win.configure(bg=TRANSPARENT_KEY)
 
         x, y = self._load_position()
@@ -128,7 +133,9 @@ class StatusDot:
         canvas = tk.Canvas(win, width=SIZE, height=SIZE, bg=TRANSPARENT_KEY, highlightthickness=0)
         canvas.pack()
         pad = 2
-        circle_id = canvas.create_oval(pad, pad, SIZE - pad, SIZE - pad, fill=COLOR_IDLE, outline="")
+        circle_id = canvas.create_oval(
+            pad, pad, SIZE - pad, SIZE - pad, fill=COLOR_IDLE, outline="",
+        )
 
         canvas.bind("<ButtonPress-1>", self._on_press)
         canvas.bind("<B1-Motion>", self._on_drag)
@@ -159,8 +166,8 @@ class StatusDot:
         if self._win is not None:
             try:
                 self._win.destroy()
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                log_event("warning", "status dot window destroy failed", {"error": str(exc)})
             self._win = None
         # Drop canvas refs so a pending flash_error timer firing after
         # destroy() hits the None guard in _set() instead of raising

@@ -1,0 +1,70 @@
+name: Bug report
+description: Something isn't working right
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more detail you give, the faster it can get fixed.
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: e.g. Windows 11 23H2, Windows 10 22H2
+      placeholder: Windows 11 23H2
+    validations:
+      required: true
+
+  - type: input
+    id: speakeasy-version
+    attributes:
+      label: SpeakEasy version
+      description: From the Settings window, or the release you downloaded/built
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: trigger
+    attributes:
+      label: Trigger used
+      options:
+        - Mouse "Back" side button
+        - Keyboard hotkey
+        - Both / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Whisper model
+      description: From Settings — tiny / base / small / medium / large-v3
+      placeholder: small
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. Pressed Ctrl+Alt+D in Notepad
+        2. Said "hello world"
+        3. Pressed it again
+        Expected: "hello world" typed at cursor
+        Actual: nothing was pasted
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        Logs live at `%LOCALAPPDATA%\SpeakEasy\logs`. Paste the lines around when the issue happened (redact anything personal first).
+      render: text
+    validations:
+      required: false

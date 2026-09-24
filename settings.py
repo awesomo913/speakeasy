@@ -17,26 +17,57 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
-
+from speakeasy_log import log_event
 
 APP_NAME = "SpeakEasy"
 DEFAULTS: dict = {
     "autostart": False,
     "dot_x": None,
     "dot_y": None,
-    # LLM polish pass (Pithflow-style cleanup): off by default so the app
-    # behaves exactly as before until the user opts in + provides a key.
+    # LLM polish pass: off by default so the app behaves exactly as before
+    # until the user opts in + provides a key.
     "llm_cleanup": False,
     "llm_api_key": "",
     "llm_model": "openai/gpt-4o-mini",
     # Status dot visibility: on by default (previous behavior).
     "show_dot": True,
+    # Keyboard toggle alongside the mouse side button. Empty string disables it.
+    "hotkey": "<ctrl>+<alt>+d",
+    # Mouse side-button (XButton1) trigger — on by default (previous behavior).
+    "mouse_button": True,
+    # Whisper model size. Applies on next launch.
+    "model": "small",
+    # "auto" lets faster-whisper detect the language; otherwise a 2-letter code.
+    "language": "auto",
+    # Quit SpeakEasy when a configured game launches (mouse/keyboard hooks can
+    # interfere with some anti-cheat or competitive games).
+    "game_guard": True,
+    "game_processes": ["fortniteclient-win64-shipping.exe", "fortnitelauncher.exe"],
 }
+
+
+# ---------- pure helpers (settings-derived, no I/O — easy to unit test) ----------
+
+def language_to_whisper(language: str) -> str | None:
+    """Map the settings "language" value to what faster-whisper expects.
+
+    "auto" (or anything blank) means "let Whisper detect it" -> None.
+    Anything else is passed through lower-cased (faster-whisper expects a
+    2-letter ISO code such as "en", "es", "fr").
+    """
+    code = (language or "").strip().lower()
+    if not code or code == "auto":
+        return None
+    return code
+
+
+def parse_game_processes(raw: str) -> list[str]:
+    """Parse a comma-separated process-name string from the settings UI.
+
+    Blank entries are dropped; each name is lower-cased and stripped so it
+    matches psutil's process names regardless of how the user typed it.
+    """
+    return [p.strip().lower() for p in raw.split(",") if p.strip()]
 
 
 # ---------- settings file ----------

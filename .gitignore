@@ -1,11 +1,18 @@
 # Build artifacts
 /.venv-build/
+.venv*/
 /dist/
 /build/
 *.spec
 __pycache__/
 *.pyc
 *.pyo
+_build_log.txt
+_venv_setup_log.txt
+
+# Test artifacts
+.pytest_cache/
+.ruff_cache/
 
 # UI mockup scratch
 /mockups/

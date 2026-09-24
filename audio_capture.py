@@ -2,7 +2,6 @@
 
 Uses sounddevice (bundled PortAudio) — zero C compilation needed.
 """
-import collections
 import io
 import threading
 import time
@@ -11,6 +10,8 @@ from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
+
+from speakeasy_log import log_event
 
 
 class AudioCapture:
@@ -91,8 +92,9 @@ class AudioCapture:
             with self._stream:
                 while not self._stop_event.is_set():
                     self._stop_event.wait(0.1)
-        except Exception as e:
-            print(f"[AudioCapture] stream error: {e}")
+        except sd.PortAudioError as exc:
+            print(f"[AudioCapture] stream error: {exc}")
+            log_event("failure", "audio input stream error", {"error": str(exc)})
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if self._stop_event.is_set():

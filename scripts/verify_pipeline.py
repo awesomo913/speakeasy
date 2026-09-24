@@ -1,7 +1,12 @@
-"""End-to-end verification test for SpeakEasy pipeline.
+"""End-to-end manual verification for the SpeakEasy pipeline.
 
-Tests: audio capture -> WAV encoding/decoding -> Vosk transcription -> text insertion.
-Uses synthetic audio (sine wave) so no real microphone needed.
+Tests: audio capture -> WAV encoding/decoding -> faster-whisper transcription
+-> text insertion -> mouse hook. Uses synthetic audio (sine wave) for the WAV
+roundtrip check, but AudioCapture and MouseHook talk to real hardware, so run
+this manually (not in CI): it needs a working microphone and, for the mouse
+hook step, a real XButton1 press within the listening window.
+
+Run from the project root:  .venv-build\\Scripts\\python.exe scripts\\verify_pipeline.py
 """
 import io
 import os
@@ -9,13 +14,13 @@ import sys
 import time
 import wave
 
-# Force UTF-8 on Windows
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+# Force UTF-8 on Windows consoles.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
-import numpy as np
+import numpy as np  # noqa: E402
 
 SEP = "=" * 60
 CHECK = "[PASS]"
@@ -26,7 +31,7 @@ print(SEP)
 
 # -- 1. Test Audio Capture (synthetic recording) --------------------
 print("\n[1/5] Testing AudioCapture...")
-from audio_capture import AudioCapture
+from audio_capture import AudioCapture  # noqa: E402
 
 cap = AudioCapture(
     silence_timeout_s=2.0,
@@ -59,10 +64,10 @@ print(f"  {CHECK} Synthetic WAV created: {len(test_wav)} bytes, {DURATION}s, {RA
 
 # -- 3. Test Transcriber --------------------------------------------
 print("\n[3/5] Testing Transcriber...")
-from transcription import Transcriber
+from transcription import Transcriber  # noqa: E402
 
 transcriber = Transcriber()
-print("  Loading model (may download ~40MB on first run)...")
+print("  Loading model (may download on first run)...")
 transcriber.ensure_loaded()
 print(f"  {CHECK} Model loaded. Transcribing...")
 
@@ -73,8 +78,9 @@ print(f"  {CHECK} Transcriber functional (returns str, no crashes)")
 
 # -- 4. Test Text Inserter ------------------------------------------
 print("\n[4/5] Testing TextInserter...")
-from text_inserter import TextInserter
-import pyperclip
+import pyperclip  # noqa: E402
+
+from text_inserter import TextInserter  # noqa: E402
 
 old_clip = pyperclip.paste()
 
@@ -90,12 +96,15 @@ print(f"  {CHECK} TextInserter ran without errors")
 
 # -- 5. Test Mouse Hook ---------------------------------------------
 print("\n[5/5] Testing MouseHook...")
-from mouse_hook import MouseHook
+from mouse_hook import MouseHook  # noqa: E402
 
 toggles = []
+
+
 def on_toggle(x, y):
     toggles.append((x, y))
     print(f"  [HOOK] XButton1 detected at ({x}, {y})")
+
 
 hook = MouseHook(on_toggle=on_toggle)
 hook.start()
@@ -117,7 +126,7 @@ print(SEP)
 print("\nSpeakEasy pipeline is fully functional:")
 print("  - AudioCapture: starts/stops clean")
 print("  - WAV encoding: correct format (16kHz mono 16-bit)")
-print("  - Transcriber: Vosk model loads, transcribes without crash")
+print("  - Transcriber: faster-whisper model loads, transcribes without crash")
 print("  - TextInserter: clipboard save/paste/restore works")
 print("  - MouseHook: listener starts/stops, detects side button")
 print("\nReady to use! Run: python main.py")

@@ -3,7 +3,7 @@
 Takes Whisper's raw transcript and returns a cleaned version: filler words
 ("um", "uh", "like") removed, punctuation fixed, tone applied — while
 preserving code terms, camelCase identifiers, file paths, and symbols
-(the coder niche Pithflow leaves open).
+(useful for developers dictating into an editor or terminal).
 
 Design rules (match the rest of SpeakEasy):
 - Stdlib only (urllib) — no new dependencies, exe build unchanged.
@@ -11,22 +11,18 @@ Design rules (match the rest of SpeakEasy):
   raw transcript. An unpolished paste always beats a lost one.
 - Reads the API key + model fresh from settings on every call, so GUI
   changes apply immediately without a restart.
-- Provider: OpenRouter (same key type as the image-generator MCP setup).
+- Provider: OpenRouter.
 """
 from __future__ import annotations
 
 import json
 import threading
+import time
 import traceback
 import urllib.request
 from collections.abc import Callable
 
-try:
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
-
+from speakeasy_log import log_event
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 TIMEOUT_S = 30
@@ -68,7 +64,6 @@ def clean_sync(raw_text: str, api_key: str, model: str) -> str:
             "X-Title": "SpeakEasy",
         },
     )
-    import time
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
@@ -80,7 +75,7 @@ def clean_sync(raw_text: str, api_key: str, model: str) -> str:
         polished = body["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, AttributeError) as exc:
         log_event("failure", "llm polish bad response", {"error": str(exc)})
-        raise ValueError(f"unexpected API response: {str(body)[:200]}")
+        raise ValueError(f"unexpected API response: {str(body)[:200]}") from exc
     log_event("perf", "llm polish",
               {"in_chars": len(raw_text), "out_chars": len(polished),
                "ms": round((time.perf_counter() - t0) * 1000), "model": model})

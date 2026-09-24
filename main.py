@@ -1,49 +1,33 @@
-"""Auto-Mic Voice Input — mouse-triggered recording, transcription, and paste.
+"""SpeakEasy — mouse/hotkey-triggered voice dictation.
 
-Top-left mouse side button (XButton1) toggles the microphone.
-Records until button is pressed again OR 10 seconds of silence.
-Transcribes locally via faster-whisper, then pastes at cursor.
+The mouse "Back" side button (XButton1), and/or a configurable keyboard
+hotkey, toggle the microphone. Records until triggered again OR 10 seconds
+of silence. Transcribes locally via faster-whisper, then pastes at cursor.
 
 Usage:  python main.py
 """
 
 import ctypes
-import datetime as _dt
 import queue
 import signal
 import sys
-import threading
 import time
 from enum import Enum, auto
-from pathlib import Path
 
-# ── Diagnostic logger bootstrap (must run before local imports) ──────
-sys.path.insert(0, str(Path.home() / ".claude" / "scripts"))
-from crash_logger import install, log_event, get_recent_crashes
+from speakeasy_log import get_recent_crashes, install, log_event
 
+install(session_name=f"exe_SpeakEasy_{time.strftime('%Y%m%d_%H%M%S')}")
 
-def _log_root() -> Path:
-    """Where session/crash logs are persisted.
-
-    In a frozen one-file exe, __file__ lives in a _MEIxxxx temp dir that
-    Windows wipes on exit, so logs written there are lost. Persist under the
-    standard session-data tree instead. In dev, log next to the source.
-    """
-    if getattr(sys, "frozen", False):
-        return Path.home() / ".claude" / "session-data" / _dt.date.today().isoformat()
-    return Path(__file__).parent
-
-
-install(project_root=_log_root(), session_name=f"exe_SpeakEasy_{_dt.datetime.now():%Y%m%d_%H%M%S}")
-
-from audio_capture import AudioCapture
-from fortnite_guard import FortniteGuard
-from mouse_hook import MouseHook
-from overlay import Overlay
-from status_dot import StatusDot
-from text_inserter import TextInserter
-from transcription import Transcriber
-from tray import Tray
+from audio_capture import AudioCapture  # noqa: E402 — logger must install first
+from game_guard import GameGuard  # noqa: E402
+from hotkey import HotkeyListener  # noqa: E402
+from mouse_hook import MouseHook  # noqa: E402
+from overlay import Overlay  # noqa: E402
+from status_dot import StatusDot  # noqa: E402
+from text_inserter import TextInserter  # noqa: E402
+from transcription import Transcriber  # noqa: E402
+from tray import Tray  # noqa: E402
+from version import __version__  # noqa: E402
 
 try:
     import settings as _settings
@@ -89,7 +73,7 @@ class State(Enum):
     PASTING = auto()
 
 
-class AutoMicApp:
+class SpeakEasyApp:
     """Top-level orchestrator."""
 
     def __init__(self):
@@ -108,14 +92,23 @@ class AutoMicApp:
         # to pasting the unpolished text instead of losing the dictation
         self._raw_text: str = ""
 
-        # mouse hook
-        self._hook = MouseHook(on_toggle=self._on_toggle)
+        settings_now = _settings.load() if _settings else {}
 
-        # Fortnite guard: the global mouse hook can glitch in-game clicks, so we
-        # quit the whole app when Fortnite launches. User relaunches afterward.
-        self._guard = FortniteGuard(
-            on_detected=lambda: self._cmd_queue.put("shutdown")
+        # mouse hook + keyboard hotkey — both feed the same toggle
+        self._hook = MouseHook(
+            on_toggle=self._on_toggle,
+            enabled=bool(settings_now.get("mouse_button", True)),
         )
+        self._hotkey = HotkeyListener(on_toggle=self._on_toggle)
+
+        # Game guard: a global mouse/keyboard hook can glitch input in some
+        # games, so we quit the whole app when a configured process launches.
+        # The user relaunches afterward.
+        self._guard = GameGuard(
+            on_detected=lambda: self._cmd_queue.put("shutdown"),
+            processes=settings_now.get("game_processes", []),
+        )
+        self._game_guard_enabled = bool(settings_now.get("game_guard", True))
 
         # system-tray control (pause/resume + quit)
         self._paused = False
@@ -157,26 +150,30 @@ class AutoMicApp:
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self):
-        print("[AutoMic] Starting... (press top mouse side-button to toggle mic)")
-        print("[AutoMic] First run downloads the Whisper model (one time)")
+        print(f"[SpeakEasy] v{__version__} starting... "
+              "(press the mouse side-button or hotkey to toggle mic)")
+        print("[SpeakEasy] First run downloads the Whisper model (one time)")
 
         # Self-diagnosis: note if a recent run crashed (no console in the exe,
         # so this goes to the log rather than the screen).
-        recent = get_recent_crashes(_log_root())
+        recent = get_recent_crashes()
         if recent:
             log_event("warning", "previous run(s) crashed", {"count": len(recent)})
-        log_event("state", "app starting", {"frozen": getattr(sys, "frozen", False)})
+        log_event("state", "app starting",
+                  {"frozen": getattr(sys, "frozen", False), "version": __version__})
 
         # Pre-load model so first transcription isn't slow
-        print("[AutoMic] Pre-loading transcription model...")
+        print("[SpeakEasy] Pre-loading transcription model...")
         self.transcriber.ensure_loaded()
-        print("[AutoMic] Model ready.")
+        print("[SpeakEasy] Model ready.")
 
-        # start tray icon (pause/resume + quit), status dot, and mouse hook
+        # start tray icon (pause/resume + quit), status dot, and input triggers
         self._tray.start()
         self._refresh_dot()
         self._hook.start()
-        self._guard.start()
+        self._hotkey.start(_settings.load().get("hotkey", "") if _settings else "")
+        if self._game_guard_enabled:
+            self._guard.start()
 
         # signal handlers for clean exit
         signal.signal(signal.SIGINT, self._on_signal)
@@ -190,6 +187,7 @@ class AutoMicApp:
         if self._audio and self._audio.is_recording():
             self._audio.stop()
         self._hook.stop()
+        self._hotkey.stop()
         self._guard.stop()
         self._tray.stop()
         self.status_dot.destroy()
@@ -199,7 +197,7 @@ class AutoMicApp:
     # Callbacks (from non-main threads → enqueue)
     # ------------------------------------------------------------------
     def _on_toggle(self, x: int = 0, y: int = 0):
-        """Called by mouse hook thread."""
+        """Called by the mouse hook or hotkey listener thread."""
         self._cursor_x, self._cursor_y = x, y
         self._cmd_queue.put("toggle")
 
@@ -239,6 +237,8 @@ class AutoMicApp:
             self._open_settings()
         elif cmd == "refresh_dot":
             self._refresh_dot()
+        elif cmd == "settings_changed":
+            self._apply_live_settings()
         elif cmd == "shutdown":
             self.shutdown()
             return True
@@ -259,7 +259,7 @@ class AutoMicApp:
     # ------------------------------------------------------------------
     def _handle_toggle(self):
         if self._paused:
-            return  # listening is paused from the tray — ignore the button
+            return  # listening is paused from the tray — ignore the trigger
         if self.state == State.IDLE:
             self._start_recording()
         elif self.state == State.RECORDING:
@@ -285,6 +285,7 @@ class AutoMicApp:
             open_settings_window(
                 self.overlay.get_root(),
                 on_dot_toggle=lambda: self._cmd_queue.put("refresh_dot"),
+                on_settings_saved=lambda: self._cmd_queue.put("settings_changed"),
             )
         except Exception as exc:  # noqa: BLE001 — never crash the loop on UI error
             log_event("failure", "open settings failed", {"error": str(exc)})
@@ -293,12 +294,38 @@ class AutoMicApp:
         """Apply the show_dot preference live (called at startup + on GUI toggle)."""
         try:
             show = bool(_settings.load().get("show_dot", True)) if _settings else True
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — a bad settings file must not hide the dot
+            log_event("warning", "reading show_dot setting failed; defaulting to visible",
+                      {"error": str(exc)})
             show = True
         self.status_dot.set_visible(show)
         if show:
             self.status_dot.set_state(self.state, self._paused)
         log_event("state", "status dot visibility applied", {"visible": show})
+
+    def _apply_live_settings(self) -> None:
+        """Re-apply settings that can change without a restart (hotkey, triggers, guard)."""
+        if _settings is None:
+            return
+        try:
+            data = _settings.load()
+        except Exception as exc:  # noqa: BLE001
+            log_event("warning", "live settings reload failed", {"error": str(exc)})
+            return
+        self._hook.set_enabled(bool(data.get("mouse_button", True)))
+        self._hotkey.restart(data.get("hotkey", ""))
+        # Always rebuild the guard so an edited process list takes effect live.
+        want_guard = bool(data.get("game_guard", True))
+        if self._game_guard_enabled:
+            self._guard.stop()
+        self._guard = GameGuard(
+            on_detected=lambda: self._cmd_queue.put("shutdown"),
+            processes=data.get("game_processes", []),
+        )
+        if want_guard:
+            self._guard.start()
+        self._game_guard_enabled = want_guard
+        log_event("state", "live settings applied", {})
 
     def _llm_cleanup_enabled(self) -> bool:
         """True only when the user opted in AND provided a key (else raw paste)."""
@@ -306,12 +333,14 @@ class AutoMicApp:
             return False
         try:
             data = _settings.load()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — a bad settings file must not crash a paste
+            log_event("warning", "reading llm settings failed; skipping polish",
+                      {"error": str(exc)})
             return False
         return bool(data.get("llm_cleanup")) and bool(data.get("llm_api_key", "").strip())
 
     def _start_recording(self):
-        print("[AutoMic] Recording started...")
+        print("[SpeakEasy] Recording started...")
         self._set_state(State.RECORDING)
         self.overlay.state_recording(self._cursor_x, self._cursor_y)
 
@@ -326,18 +355,20 @@ class AutoMicApp:
         if not self._audio:
             return
 
-        print("[AutoMic] Stopping recording...")
+        print("[SpeakEasy] Stopping recording...")
         self._wav_data = self._audio.stop()
         self._audio = None
 
         if len(self._wav_data) < 1024:  # too short / empty
-            print("[AutoMic] No speech detected.")
-            self.overlay.state_error("No speech detected — try again", self._cursor_x, self._cursor_y)
+            print("[SpeakEasy] No speech detected.")
+            self.overlay.state_error(
+                "No speech detected — try again", self._cursor_x, self._cursor_y,
+            )
             self._set_state(State.IDLE)
             self.status_dot.flash_error(self.state, self._paused)
             return
 
-        print(f"[AutoMic] Transcribing {len(self._wav_data)} bytes...")
+        print(f"[SpeakEasy] Transcribing {len(self._wav_data)} bytes...")
         self._set_state(State.TRANSCRIBING)
         self.overlay.state_transcribing(self._cursor_x, self._cursor_y)
 
@@ -349,7 +380,7 @@ class AutoMicApp:
         )
 
     def _on_transcription_result(self, text: str):
-        print(f"[AutoMic] Transcribed: '{text}'")
+        print(f"[SpeakEasy] Transcribed: '{text}'")
         if not text.strip():
             self.overlay.state_error("Transcription was empty", self._cursor_x, self._cursor_y)
             self._set_state(State.IDLE)
@@ -359,7 +390,7 @@ class AutoMicApp:
         self._raw_text = text  # keep for fallback if the polish pass fails
 
         if self._llm_cleanup_enabled():
-            print("[AutoMic] Polishing with LLM...")
+            print("[SpeakEasy] Polishing with LLM...")
             self._set_state(State.TRANSCRIBING)
             self.overlay.state_transcribing(self._cursor_x, self._cursor_y)
             data = _settings.load()
@@ -378,7 +409,14 @@ class AutoMicApp:
         """Single choke point for all pasting (raw or polished)."""
         self._set_state(State.PASTING)
         self.overlay.state_pasting(preview=text, x=self._cursor_x, y=self._cursor_y)
-        self.inserter.paste(text)
+        try:
+            self.inserter.paste(text)
+        except Exception as exc:  # noqa: BLE001 — a clipboard failure must not crash the loop
+            log_event("failure", "pasting transcript failed", {"error": str(exc)})
+            self.overlay.state_error(
+                "Couldn't paste — clipboard access failed", self._cursor_x, self._cursor_y,
+            )
+            self.status_dot.flash_error(State.IDLE, self._paused)
         self._set_state(State.IDLE)
 
     def _on_polish_result(self, text: str):
@@ -387,17 +425,17 @@ class AutoMicApp:
             # Empty polish = fall back to raw, never paste nothing.
             log_event("warning", "llm polish empty; using raw transcript")
             polished = self._raw_text
-        print(f"[AutoMic] Polished: '{polished}'")
+        print(f"[SpeakEasy] Polished: '{polished}'")
         self._paste_text(polished)
 
     def _on_polish_error(self, exc: Exception):
-        print(f"[AutoMic] Polish failed, pasting raw: {exc}")
+        print(f"[SpeakEasy] Polish failed, pasting raw: {exc}")
         log_event("warning", "llm polish failed; using raw transcript",
                   {"error": str(exc)})
         self._paste_text(self._raw_text)
 
     def _on_transcription_error(self, exc: Exception):
-        print(f"[AutoMic] Transcription error: {exc}")
+        print(f"[SpeakEasy] Transcription error: {exc}")
         log_event("failure", "transcription failed", {"error": str(exc)})
         self.overlay.state_error(f"Transcription failed: {exc}", self._cursor_x, self._cursor_y)
         self._set_state(State.IDLE)
@@ -413,17 +451,17 @@ def main():
     # instead of spawning a second listener that fights over the microphone.
     if not _acquire_single_instance():
         log_event("state", "second instance blocked")
-        print("[AutoMic] SpeakEasy is already running (tray icon).")
+        print("[SpeakEasy] SpeakEasy is already running (tray icon).")
         return
 
-    app = AutoMicApp()
+    app = SpeakEasyApp()
     try:
         app.start()
     except KeyboardInterrupt:
         pass
     finally:
         app.shutdown()
-        print("[AutoMic] Goodbye.")
+        print("[SpeakEasy] Goodbye.")
 
 
 if __name__ == "__main__":

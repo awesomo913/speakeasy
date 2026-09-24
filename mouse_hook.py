@@ -18,14 +18,7 @@ from ctypes import wintypes
 
 from pynput import mouse
 
-try:
-    # main.py installs the logger and adds ~/.claude/scripts to sys.path before
-    # importing this module. No-op fallback if imported standalone in dev.
-    from crash_logger import log_event
-except Exception:  # pragma: no cover
-    def log_event(*_args, **_kwargs):
-        pass
-
+from speakeasy_log import log_event
 
 _WM_XBUTTONDOWN = 0x020B
 _WM_XBUTTONUP = 0x020C
@@ -66,14 +59,30 @@ def _is_fortnite_foreground() -> bool:
 
 
 class MouseHook:
-    """Top side button → dictation toggle, suppressed everywhere except Fortnite."""
+    """Bottom side button → dictation toggle, suppressed everywhere except Fortnite.
 
-    def __init__(self, on_toggle: Callable[[int, int], None], debounce_s: float = 0.35):
+    `enabled` gates whether the button is captured at all — when disabled (the
+    "mouse_button" setting is off), XButton1 events pass straight through and
+    are never swallowed, so the OS default (Back) keeps working.
+    """
+
+    def __init__(
+        self,
+        on_toggle: Callable[[int, int], None],
+        debounce_s: float = 0.35,
+        enabled: bool = True,
+    ):
         self._on_toggle = on_toggle
         self._debounce_s = debounce_s
         self._last_press = 0.0
         self._listener: mouse.Listener | None = None
         self._thread: threading.Thread | None = None
+        self._enabled = enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Toggle capture live, from a settings change — no restart needed."""
+        self._enabled = enabled
+        log_event("state", "mouse hook enabled changed", {"enabled": enabled})
 
     def _event_filter(self, msg: int, data) -> bool:
         """Low-level hook filter. Runs for EVERY mouse event — keep it cheap."""
@@ -82,6 +91,8 @@ class MouseHook:
             return True
         if (data.mouseData >> 16) != _XBUTTON1:
             return True  # top side button (x2) and others: leave untouched
+        if not self._enabled:
+            return True  # trigger disabled in settings — never swallow the button
 
         # Bottom side button. In Fortnite, let the game have it (no dictation toggle).
         if _is_fortnite_foreground():
