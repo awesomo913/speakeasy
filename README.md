@@ -17,6 +17,10 @@
   <a href="https://github.com/awesomo913/speakeasy/releases/latest"><b>⬇ Download for Windows</b></a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Press Ctrl+Alt+D, talk, press again — the words are typed at your cursor" width="85%">
+</p>
+
 ## Why SpeakEasy
 
 - **Actually local.** Speech-to-text runs on your CPU via [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No account, no subscription, no audio ever leaves your machine.
@@ -105,6 +109,10 @@ Bigger models are more accurate and slower. All run on CPU — no GPU required.
 | large-v3 | ~3 GB | Slowest | Best |
 
 ## Comparison
+
+<p align="center">
+  <img src="docs/assets/cost-compare.png" alt="Yearly cost: Wispr Flow $180, Willow Voice $180, Pithflow $119.88, Superwhisper $101.88, SpeakEasy $0" width="100%">
+</p>
 
 | | SpeakEasy | Windows Voice Typing (Win+H) | Paid cloud dictation apps |
 |---|---|---|---|
