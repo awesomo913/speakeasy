@@ -21,6 +21,10 @@
   <img src="docs/assets/demo.gif" alt="Press Ctrl+Alt+D, talk, press again — the words are typed at your cursor" width="85%">
 </p>
 
+<p align="center">
+  <a href="docs/assets/promo.mp4">▶ Watch the 21-second promo video</a>
+</p>
+
 ## Why SpeakEasy
 
 - **Actually local.** Speech-to-text runs on your CPU via [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No account, no subscription, no audio ever leaves your machine.
